@@ -1,2 +1,17 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+*.mlx binary
+*.mat binary
+*.fig binary
+*.mlapp binary
+*.mdl binary
+*.slx binary
+*.mdlp binary
+*.slxp binary
+*.sldd binary
+*.p binary
+*.xlsx binary
+*.jpg binary
+*.pdf binary
+*.docx binary
