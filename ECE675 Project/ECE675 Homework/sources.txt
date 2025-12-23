@@ -1,0 +1,16 @@
+
+Rear Wheel Torque Vectoring:
+
+https://dspace.lib.cranfield.ac.uk/server/api/core/bitstreams/e365eaff-f3c9-4e59-82af-48dc0accd441/content
+Non-linear tire modelling and vehicle simulation:
+https://www.researchgate.net/publication/267494023_Construction_of_a_Rational_Tire_Model_for_High_Fidelity_Vehicle_Dynamics_Simulation_Under_Extreme_Driving_and_Environmental_Conditions
+file:///C:/Users/iwant/Downloads/baslamisli_solmaz_ESDA.pdf
+MATLAB has existing blocks for 3DOF 2-track, Pacejka, etc:
+https://www.mathworks.com/help/vdynblks/ref/vehiclebody3dof.html
+Other:
+https://www.tandfonline.com/doi/epdf/10.1080/00423114.2022.2054352?needAccess=true
+
+Standards for passenger comfort in automated vehicles: Acceleration and jerk - ScienceDirect
+
+content
+https://vtechworks.lib.vt.edu/server/api/core/bitstreams/fe6d4ca1-514b-4e2b-b1ac-6561824a9de1/content

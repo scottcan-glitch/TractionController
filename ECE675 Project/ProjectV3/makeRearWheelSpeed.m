@@ -1,0 +1,35 @@
+function F_long_front = makeRearWheelSpeed(WheelFrameForces, P, omega_dot_1, omega_dot_4)
+
+% Extract from WheelFrameForces
+F_1_long = WheelFrameForces.long(1);
+F_2_long = WheelFrameForces.long(2);
+F_3_long = WheelFrameForces.long(3);
+F_4_long = WheelFrameForces.long(4);
+
+% Extract from parameters
+B_1 = P.B_1;
+B_2 = P.B_2;
+B_3 = P.B_3;
+B_4 = P.B_4;
+
+I_1 = P.I_1;
+I_2 = P.I_2;
+I_3 = P.I_3;
+I_4 = P.I_4;
+
+r_wheel = P.r_wheel;
+
+
+% PowerTrainEquations
+-F_1_long*r_wheel - B_1*omega_1 == I_1*omega_dot_1
+T_m2 - F_2_long*r_wheel - B_2*omega_2 == I_2*omega_dot_2
+T_m3 - F_3_long*r_wheel - B_3*omega_3 == I_3*omega_dot_3
+-F_4_long*r_wheel - B_4*omega_4 == I_4*omega_dot_4
+
+
+F_1_long = -(I_1*omega_dot_1 + B_1*omega_1)/r_wheel;
+F_4_long = -(I_4*omega_dot_4 + B_4*omega_4)/r_wheel;
+
+
+F_long_front = struct([F_1_long, F_4_long]);
+end

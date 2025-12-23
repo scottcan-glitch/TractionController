@@ -1,0 +1,21 @@
+function [omega_dot_2, omega_dot_3] = makeDriveTrain(WheelFrameForces, P, u)
+
+% Extract from WheelFrameForces
+F_2_long = WheelFrameForces.long(2);
+F_3_long = WheelFrameForces.long(3);
+
+% Extract Input
+T_m2 = u.T_m2;
+T_m3 = u.T_m3;
+% Extract from parameters
+B_2 = P.B_2;
+B_3 = P.B_3;
+I_2 = P.I_2;
+I_3 = P.I_3;
+r_wheel = P.r_wheel;
+
+% PowerTrainEquations
+omega_dot_2 = (T_m2 - F_2_long*r_wheel - B_2*omega_2)/I_2;
+omega_dot_3 = (T_m3 - F_3_long*r_wheel - B_3*omega_3)/I_3;
+
+end

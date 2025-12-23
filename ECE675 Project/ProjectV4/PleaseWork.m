@@ -1,0 +1,279 @@
+%% ==================  MODEL + INTEGRATOR SETUP ==================
+sedan1 = CarWithDefaults("sedan");
+model  = Model_v4(sedan1);
+
+matlabFunction(model.f, ...
+    'Vars', { model.symbols.State.vector', ...
+              model.symbols.StateDeriv.vector', ...
+              [model.symbols.Input.vector, model.symbols.InputDeriv.delta_dot]' }, ...
+    'File','dynamicsImplicitFcn');
+
+import casadi.*
+
+Nx = 5;
+Nu = 4;
+
+x  = MX.sym('x',Nx,1);
+xd = MX.sym('xd',Nx,1);
+u  = MX.sym('u',Nu,1);
+
+f = dynamicsImplicitFcn(x,xd,u);
+
+dae = struct;
+dae.x   = x;
+dae.z   = xd;
+dae.p   = u;
+dae.ode = xd;
+dae.alg = f;
+
+Ts = 0.1;
+
+opts = struct;
+opts.tf            = Ts;
+opts.abstol        = 1e-8;
+opts.reltol        = 1e-8;
+opts.max_num_steps = 50000;
+
+F = integrator('F','idas',dae,opts);
+
+x_k = MX.sym('x_k',Nx,1);
+u_k = MX.sym('u_k',Nu,1);
+
+z0 = MX.zeros(Nx,1);
+res = F('x0', x_k, 'p', u_k, 'z0', z0);
+xNext = Function('xNext',{x_k,u_k},{res.xf});
+
+
+%% ==================  STEADY-STATE INPUT SOLVER (wrapper) ==================
+get_u_ref = @(x_ref,u_guess) compute_u_ref_ss( ...
+        xNext, x_ref, u_guess, ...
+        sedan1.limits.State.Lowerbound, ...
+        sedan1.limits.State.Upperbound, ...
+        sedan1.limits.Input.Lowerbound, ...
+        sedan1.limits.Input.Upperbound );
+
+
+%% ==================  COST MATRICES & FUNCS ==================
+Q = diag([10 10 1e-3 1 1]);
+R = diag([0.1 0.1 10 10]);
+P = diag([10 10 5 1 1]);
+
+stageCost = @(x,xr,u,ur) (x-xr)'*Q*(x-xr) + (u-ur)'*R*(u-ur);
+termCost  = @(x,xr)      (x-xr)'*P*(x-xr);
+
+incCost = @(x,xr,u,ur) stageCost(x,xr,u,ur);
+endCost = @(x,xr)      termCost(x,xr);
+
+
+%% ==================  MPC SETUP ==================
+Nh = 3;
+
+InputLB = sedan1.limits.Input.Lowerbound;
+InputUB = sedan1.limits.Input.Upperbound;
+StateLB = sedan1.limits.State.Lowerbound;
+StateUB = sedan1.limits.State.Upperbound;
+
+Xk   = MX.sym('Xk',Nx,1);      % current state param
+Uprev = MX.sym('Uprev',Nu,1);  % previous input param
+xref  = MX.sym('xref',Nx,1);   % reference state param
+uref  = MX.sym('uref',Nu,1);   % steady-state input param
+
+% containers
+args.lbw = [];
+args.ubw = [];
+args.lbg = [];
+args.ubg = [];
+args.w0  = [];
+
+nlp.g = {};
+nlp.w = {};
+nlp.J = 0;
+
+% Parameter order MUST match p0_val constructed later:
+nlp.p = [Xk; Uprev; xref; uref];
+
+
+% tuning
+eps_v = 1e-3;        % denom protection for slip (m/s)
+slack_pen = 1e3;     % heavy penalty for slip slack
+Rdu = diag([0.01,0.01,0.1,0.1]);  % Δu penalty (tune small)
+
+% build problem
+Xk_sym = Xk;         % symbol used in integrator call; will be updated per stage
+U_prev_sym = [];     % placeholder for previous Uk symbol
+
+for k = 0:Nh-1
+
+    % --- control variable at stage k
+    Uk = MX.sym(['U_' num2str(k)],Nu,1);
+    nlp.w = [nlp.w{:}; Uk];
+    args.lbw = [args.lbw; InputLB];
+    args.ubw = [args.ubw; InputUB];
+    args.w0  = [args.w0; zeros(Nu,1)];
+
+    % integrate (x_k -> Xk_end under Uk)
+    Xk_end = xNext(Xk_sym, Uk);
+    nlp.J = nlp.J + incCost(Xk_end, xref, Uk, uref);
+
+    % --- new state at k+1 (decision var)
+    Xk_new = MX.sym(['X_' num2str(k+1)], Nx,1);
+    nlp.w = [nlp.w{:}; Xk_new];
+    args.lbw = [args.lbw; StateLB];
+    args.ubw = [args.ubw; StateUB];
+    args.w0  = [args.w0; zeros(Nx,1)];
+
+    % dynamic equality: Xk_end == Xk_new
+    nlp.g = [nlp.g; {Xk_end - Xk_new}];
+    args.lbg = [args.lbg; zeros(Nx,1)];
+    args.ubg = [args.ubg; zeros(Nx,1)];
+
+    % --- discrete derivative constraint for steering/input (correct)
+    % (U_k(3) - U_{k-1}(3))/Ts = U_k(4)
+    if k == 0
+        prev_u3 = Uprev(3);           % from parameter
+        prev_u_vec = Uprev;
+    else
+        prev_u3 = U_prev_sym(3);      % from previous Uk symbol
+        prev_u_vec = U_prev_sym;
+    end
+
+    nlp.g = [nlp.g; {(Uk(3) - prev_u3)/Ts - Uk(4)}];
+    args.lbg = [args.lbg; 0];
+    args.ubg = [args.ubg; 0];
+
+    % --- Δu penalty (small) to avoid impulses
+    du = Uk - prev_u_vec;
+    nlp.J = nlp.J + du.'*Rdu*du;
+
+    % store for next iter
+    U_prev_sym = Uk;
+
+    % --- slip constraints with slack (soft)
+    Sk = MX.sym(['S_' num2str(k)],2,1);   % slack var >= 0
+    nlp.w = [nlp.w{:}; Sk];
+    args.lbw = [args.lbw; 0; 0];
+    % use a large finite upper bound instead of Inf to avoid issues
+    args.ubw = [args.ubw; 1e6; 1e6];
+    args.w0  = [args.w0; 0; 0];
+
+    % extract states from Xk_end
+    Vx = Xk_end(1);
+    Vy = Xk_end(2);
+    r  = Xk_end(3);
+    w2 = Xk_end(4);
+    w3 = Xk_end(5);
+
+    r_w = sedan1.geometry.r_wheel;
+    tw  = sedan1.geometry.t;
+
+    wc2 = Vx - (tw/2)*r;
+    wc3 = Vx + (tw/2)*r;
+
+    % safe denominators: sign(wc)*max(abs(wc), eps_v)
+    den2 = sign(wc2) .* max(abs(wc2), eps_v);
+    den3 = sign(wc3) .* max(abs(wc3), eps_v);
+
+    slip2 = (w2*r_w - wc2) ./ den2;
+    slip3 = (w3*r_w - wc3) ./ den3;
+
+    % slip with slack: slip - s <= ub and >= lb  -> implemented via bounds on (slip - s)
+    nlp.g = [nlp.g; {slip2 - Sk(1)}; {slip3 - Sk(2)}];
+    args.lbg = [args.lbg; -0.50; -0.50];
+    args.ubg = [args.ubg;  0.50;  0.50];
+
+    % slack penalty in cost
+    nlp.J = nlp.J + slack_pen*(Sk(1)^2 + Sk(2)^2);
+
+    % update Xk_sym for next stage
+    Xk_sym = Xk_new;
+end
+
+% terminal cost
+nlp.J = nlp.J + endCost(Xk_end, xref);
+
+% pack NLP
+nlp_prob = struct('f', nlp.J, 'x', vertcat(nlp.w{:}), ...
+                  'g', vertcat(nlp.g{:}), 'p', nlp.p);
+
+% solver options
+opts2 = struct;
+opts2.ipopt.max_iter = 400;
+opts2.ipopt.print_level = 2;
+opts2.ipopt.acceptable_tol = 1e-6;
+opts2.ipopt.acceptable_obj_change_tol = 1e-5;
+opts2.ipopt.tol = 1e-7;
+
+solver = nlpsol('solver','ipopt',nlp_prob,opts2);
+
+solveMPC = @(p0,w0) solver('x0',w0,'lbx',args.lbw,'ubx',args.ubw, ...
+                           'lbg',args.lbg,'ubg',args.ubg,'p',p0);
+
+
+%% ==================  SIMULATION ==================
+Nsim = 20;
+
+x0_val = [10;0;0;10/sedan1.geometry.r_wheel;10/sedan1.geometry.r_wheel];
+xref_val = [20;0;0;20.5/sedan1.geometry.r_wheel;20.5/sedan1.geometry.r_wheel];
+
+[xref_val, uref_val] = get_u_ref(xref_val,[26.5;26.5;0;0]);
+
+u_prev_val = [0;0;0;0];                 % initial previous input (parameter)
+p0_val = [x0_val; u_prev_val; xref_val; uref_val];
+
+S0 = [0;0];
+w0_val = repmat([uref_val; x0_val; S0],Nh,1);
+
+x_k = [x0_val, NaN(Nx,Nsim-1)];
+u_k = NaN(Nu,Nsim-1);
+
+% masks for extraction
+single_stage_len = Nu + Nx + 2; % U + X + S
+u_first = [ones(Nu,1); zeros(Nx+2,1)];
+u_mask = repmat([ones(Nu,1); zeros(Nx+2,1)],Nh,1);
+x_mask = repmat([zeros(Nu,1); ones(Nx,1); zeros(2,1)],Nh,1);
+
+for k = 1:Nsim
+
+    sol = solveMPC(p0_val, w0_val);
+    w = full(sol.x);
+
+    % extract first-stage U and X
+    % since stage layout is [U; X; S] repeated, index first-stage U directly
+    u_stage = w(1:Nu);
+    u_k(:,k) = u_stage;
+    u_prev = u_stage;
+
+    % extract horizon if needed
+    u_k_horizon(:,k) = w(u_mask==1);
+    x_k_horizon(:,k) = w(x_mask==1);
+
+    % step plant
+    x_kp1 = full(xNext(x_k(:,k), u_k(:,k)));
+
+    % warm-start shift: drop first stage and append last stage copy
+    if numel(w) >= (single_stage_len)
+        w_shift = [ w((single_stage_len+1):end); w(end-(single_stage_len)+1:end) ];
+    else
+        w_shift = w; % fallback
+    end
+    w0_val = w_shift;
+
+    % update params for next solve
+    p0_val = [ x_kp1; u_prev; xref_val; uref_val ];
+
+    x_k(:,k+1) = x_kp1;
+end
+
+
+%% ==================  PLOTS ==================
+figure;
+subplot(2,1,1);
+plot(0:Nsim, x_k(1,:), 'r-', 'LineWidth', 2); hold on;
+plot(0:Nsim, xref_val(1)*ones(1,Nsim+1),'b--');
+ylabel('Longitudinal speed (m/s)');
+title('Speed tracking');
+
+subplot(2,1,2);
+stairs(0:Nsim-1, u_k(1,:), 'k-', 'LineWidth', 2);
+ylabel('Left wheel torque');
+xlabel('Step');
