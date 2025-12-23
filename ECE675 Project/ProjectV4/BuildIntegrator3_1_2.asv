@@ -48,10 +48,7 @@ u_k = MX.sym('u_k',Nu,1);
 z_0 = MX.zeros(Nx,1);
 result = F('x0', x_k,'p', u_k,'z0', z_0);           %integrate. z0 is guess for solver. we could provide a better guess..
 xNext = Function('xNext', {x_k, u_k},{result.xf});
-
-% generate c code
-xNext.generate('xNext_generated.c')
-
+xNext.generate(xNext_generated.cpp")
 
 %% Build Split HIGH/LOW-MU model with sedan2 Car.m instance, sets up CasADi integrator for
 % % state evolution. xNext() integrates to next state.
