@@ -1,7 +1,7 @@
 # TractionController
 ProjectV4 contains ME675 Course Project, Nonlinear MPC Traction controller. Some notes:
   - This project was very difficult and did not get successful results until a week before it was due
-  - All that to say, this repo is a mess.
+  - All that to say, this repo is a MESS.
   - Good luck
       - Go to ECE675 Project/ProjectV4/
       - Model_v5.m assembles the model using an instance of Car.m. CarWithDefaults.m inherits and sets default values. Model_v5 references many other scripts which serve other functions, and programmatically builds the differential equations for the vehicle model. This is built with MATLAB symbolic variables. If you want to simulate a different vehicle, adjust any of the parameters of the car.m instance.
